@@ -1,9 +1,10 @@
 package gee
 
 import (
-	"sync"
-	"github.com/Godyu97/geecache/lru"
 	"fmt"
+	"github.com/Godyu97/geecache/lru"
+	"github.com/Godyu97/geecache/singleflight"
+	"sync"
 )
 
 type cache struct {
@@ -34,28 +35,30 @@ func (c *cache) get(key string) (ByteView, bool) {
 	return ByteView{}, false
 }
 
-//Getter 如果缓存不存在，应从数据源（文件，数据库等）获取数据并添加到缓存中。
+// Getter 如果缓存不存在，应从数据源（文件，数据库等）获取数据并添加到缓存中。
 type Getter interface {
 	Get(key string) ([]byte, error)
 }
 
-//定义一个函数类型 F，并且实现接口 A 的方法，然后在这个方法中调用自己。这是 Go 语言中将其他函数（参数返回值定义与 F 一致）转换为接口 A 的常用技巧。
+// 定义一个函数类型 F，并且实现接口 A 的方法，然后在这个方法中调用自己。这是 Go 语言中将其他函数（参数返回值定义与 F 一致）转换为接口 A 的常用技巧。
 type GetterFunc func(key string) ([]byte, error)
 
 func (f GetterFunc) Get(key string) ([]byte, error) {
 	return f(key)
 }
 
-//Group
+// Group
 type Group struct {
 	name string
 	//缓存未命中时获取源数据的回调(callback)
 	getter Getter
 	//并发安全的单机缓存
 	mainCache cache
+
+	loader *singleflight.Group
 }
 
-//namespaces
+// namespaces
 var (
 	gl     sync.RWMutex
 	groups = make(map[string]*Group)
@@ -73,6 +76,7 @@ func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
 		mainCache: cache{
 			cacheBytes: cacheBytes,
 		},
+		loader: new(singleflight.Group),
 	}
 	groups[name] = g
 	return g
