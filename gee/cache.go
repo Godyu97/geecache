@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/Godyu97/geecache/lru"
 	"github.com/Godyu97/geecache/singleflight"
+	"log"
 	"sync"
 )
 
@@ -54,7 +55,8 @@ type Group struct {
 	getter Getter
 	//并发安全的单机缓存
 	mainCache cache
-
+	//分布式节点选择
+	peers  PeerPicker
 	loader *singleflight.Group
 }
 
@@ -98,7 +100,30 @@ func (g *Group) Get(key string) (ByteView, error) {
 	return g.load(key)
 }
 
+func (g *Group) RegisterPeers(peers PeerPicker) {
+	if g.peers != nil {
+		panic("RegisterPeerPicker called more than once")
+	}
+	g.peers = peers
+}
+
+func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error) {
+	b, err := peer.Get(g.name, key)
+	if err != nil {
+		return ByteView{}, err
+	}
+	return ByteView{b: b}, nil
+}
 func (g *Group) load(key string) (ByteView, error) {
+	if g.peers != nil {
+		if peer, ok := g.peers.PickPeer(key); ok {
+			if v, err := g.getFromPeer(peer, key); err != nil {
+				log.Println("[GeeCache] Failed to get from peer", err)
+			} else {
+				return v, nil
+			}
+		}
+	}
 	return g.getLocally(key)
 }
 
