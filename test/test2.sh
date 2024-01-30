@@ -10,9 +10,9 @@ sleep 3
 
 echo ">>> start test"
 for i in $(seq 1 5);do
-    curl "http://localhost:9999/api?key=Tom" &
-    curl "http://localhost:9999/api?key=Tom" &
-    curl "http://localhost:9999/api?key=Tom" &
+    curl "http://localhost:9999/api?key=Jack" &
+    curl "http://localhost:9999/api?key=Jack" &
+    curl "http://localhost:9999/api?key=Jack" &
     sleep 1
 done
 

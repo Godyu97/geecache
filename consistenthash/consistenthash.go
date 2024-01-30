@@ -9,13 +9,13 @@ import (
 // Hash maps bytes to uint32
 type Hash func(data []byte) uint32
 
-// Map constains all hashed keys
+// Map constains all hashed hvs
 type Map struct {
 	hash Hash
 	//虚拟节点倍数
 	replicas int
 	//哈希环
-	keys []int // Sorted
+	hvs []int // Sorted
 	//虚拟节点与真实节点的映射表
 	hashMap map[int]string
 }
@@ -33,32 +33,32 @@ func New(replicas int, fn Hash) *Map {
 	return m
 }
 
-// Add adds some keys to the hash.
+// Add adds some hvs to the hash.
 func (m *Map) Add(keys ...string) {
 	for _, key := range keys {
 		//对每一个真实节点 key，对应创建 m.replicas 个虚拟节点，虚拟节点的名称是：strconv.Itoa(i) + key，即通过添加编号的方式区分不同虚拟节点。
 		for i := 0; i < m.replicas; i++ {
 			//ikey
 			hash := int(m.hash([]byte(strconv.Itoa(i) + key)))
-			m.keys = append(m.keys, hash)
+			m.hvs = append(m.hvs, hash)
 			m.hashMap[hash] = key
 		}
 	}
-	sort.Ints(m.keys)
+	sort.Ints(m.hvs)
 }
 
 // Get gets the closest item in the hash to the provided key.
 // Get 获取哈希中与所提供的键最接近的项
 func (m *Map) Get(key string) string {
-	if len(m.keys) == 0 {
+	if len(m.hvs) == 0 {
 		return ""
 	}
 
-	hash := int(m.hash([]byte(key)))
+	hv := int(m.hash([]byte(key)))
 	// 二分查找合适的副本。
-	idx := sort.Search(len(m.keys), func(i int) bool {
-		return m.keys[i] >= hash
+	idx := sort.Search(len(m.hvs), func(i int) bool {
+		return m.hvs[i] >= hv
 	})
 
-	return m.hashMap[m.keys[idx%len(m.keys)]]
+	return m.hashMap[m.hvs[idx%len(m.hvs)]]
 }
