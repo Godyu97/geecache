@@ -6,6 +6,8 @@ import (
 	"github.com/Godyu97/geecache/singleflight"
 	"log"
 	"sync"
+	"github.com/Godyu97/geecache/pb"
+	"context"
 )
 
 type cache struct {
@@ -108,23 +110,37 @@ func (g *Group) RegisterPeers(peers PeerPicker) {
 }
 
 func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error) {
-	b, err := peer.Get(g.name, key)
+	log.Println("getFromPeer ", peer)
+	req := &pb.Request{
+		Group: g.name,
+		Key:   key,
+	}
+	res, err := peer.Get(context.TODO(), req)
 	if err != nil {
 		return ByteView{}, err
 	}
-	return ByteView{b: b}, nil
+	return ByteView{b: res.Value}, nil
 }
+
 func (g *Group) load(key string) (ByteView, error) {
-	if g.peers != nil {
-		if peer, ok := g.peers.PickPeer(key); ok {
-			if v, err := g.getFromPeer(peer, key); err != nil {
-				log.Println("[GeeCache] Failed to get from peer", err)
+	v, err := g.loader.Do(key, func() (any, error) {
+		if g.peers != nil {
+			if peer, ok := g.peers.PickPeer(key); ok {
+				if v, err := g.getFromPeer(peer, key); err != nil {
+					log.Println("[GeeCache] Failed to get from peer", err)
+				} else {
+					return v, nil
+				}
 			} else {
-				return v, nil
+				log.Println("[GeeCache] Failed PickPeer ")
 			}
 		}
+		return g.getLocally(key)
+	})
+	if err != nil {
+		return ByteView{}, err
 	}
-	return g.getLocally(key)
+	return v.(ByteView), nil
 }
 
 func (g *Group) getLocally(key string) (ByteView, error) {

@@ -1,9 +1,9 @@
 package main
 
 import (
-	"fmt"
 	"github.com/Godyu97/geecache/gee"
 	"log"
+	"fmt"
 	"net/http"
 )
 
@@ -18,7 +18,7 @@ func Test1() {
 		}))
 
 	addr := "0.0.0.0:9999"
-	peers := gee.NewHTTPPool(addr)
+	peers := gee.NewGrpcPool(addr)
 	log.Println("geecache is running at", addr)
 	log.Fatal(http.ListenAndServe(addr, peers))
 }

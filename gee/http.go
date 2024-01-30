@@ -3,44 +3,47 @@ package gee
 import (
 	"fmt"
 	"github.com/Godyu97/geecache/consistenthash"
-	"io"
 	"log"
-	"net/http"
-	"net/url"
-	"strings"
 	"sync"
+	"context"
+	"github.com/Godyu97/geecache/pb"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"net/http"
+	"strings"
 )
 
 const (
-	defaultBasePath = "/_geecache/"
+	defaultBasePath = ""
 	defaultReplicas = 50
 )
 
-type HTTPPool struct {
-	//https://example.net:8000
-	host        string
-	basePath    string
-	l           sync.Mutex
-	peers       *consistenthash.Map
-	httpGetters map[string]*httpGetter
+type GrpcPool struct {
+	//example.net:8000
+	host     string
+	basePath string
+	l        sync.Mutex
+	peers    *consistenthash.Map
+	grpcGets map[string]*grpcGet
+	pb.UnimplementedGroupCacheServer
 }
 
-func NewHTTPPool(host string) *HTTPPool {
-	return &HTTPPool{
+func NewGrpcPool(host string) *GrpcPool {
+	return &GrpcPool{
 		host:     host,
 		basePath: defaultBasePath,
 	}
 }
 
 // Log info with server name
-func (p *HTTPPool) Log(format string, v ...interface{}) {
+func (p *GrpcPool) Log(format string, v ...interface{}) {
 	log.Printf("[Server %s] %s", p.host, fmt.Sprintf(format, v...))
 }
 
 // ServeHTTP handle all http requests
-func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (p *GrpcPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(r.URL.Path, p.basePath) {
-		panic("HTTPPool serving unexpected path: " + r.URL.Path)
+		panic("GrpcPool serving unexpected path: " + r.URL.Path)
 	}
 	p.Log("%s %s", r.Method, r.URL.Path)
 	// /<basepath>/<groupname>/<key> required
@@ -69,55 +72,104 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Write(v.ByteSlice())
 }
 
-func (p *HTTPPool) Set(peers ...string) {
+func (p *GrpcPool) Get(ctx context.Context, in *pb.Request) (out *pb.Response, err error) {
+	p.Log("rpc Get %s %s", in.GetGroup(), in.GetKey())
+	groupName := in.GetGroup()
+	key := in.GetKey()
+	group := GetGroup(groupName)
+	if group == nil {
+		return nil, fmt.Errorf("no such group: %s" + groupName)
+	}
+
+	v, err := group.Get(key)
+	if err != nil {
+		return nil, err
+	}
+	out = &pb.Response{Value: v.ByteSlice()}
+	return out, nil
+}
+
+func (p *GrpcPool) Set(peers ...string) {
 	p.l.Lock()
 	defer p.l.Unlock()
 	p.peers = consistenthash.New(defaultReplicas, nil)
 	p.peers.Add(peers...)
-	p.httpGetters = make(map[string]*httpGetter, len(peers))
+	p.grpcGets = make(map[string]*grpcGet, len(peers))
 	for _, peer := range peers {
-		p.httpGetters[peer] = &httpGetter{
+		p.grpcGets[peer] = &grpcGet{
 			baseURL: peer + p.basePath,
 		}
 	}
 }
 
-func (p *HTTPPool) PickPeer(key string) (PeerGetter, bool) {
+func (p *GrpcPool) PickPeer(key string) (PeerGetter, bool) {
+	p.Log("Host:%s", p.host)
 	p.l.Lock()
 	defer p.l.Unlock()
 	if peer := p.peers.Get(key); peer != "" && peer != p.host {
 		p.Log("Pick peer %s", peer)
-		return p.httpGetters[peer], true
+		return p.grpcGets[peer], true
 	}
 	return nil, false
 }
 
-type httpGetter struct {
-	//http://example.com/_geecache/
+type grpcGet struct {
+	//example.com:8001/_geecache/
 	baseURL string
 }
 
-func (h *httpGetter) Get(group string, key string) ([]byte, error) {
-	u := fmt.Sprintf(
-		"%s%s/%s",
-		h.baseURL,
-		url.QueryEscape(group),
-		url.QueryEscape(key),
-	)
-	res, err := http.Get(u)
+func (h *grpcGet) Get(ctx context.Context, in *pb.Request) (out *pb.Response, err error) {
+
+	//u := fmt.Sprintf(
+	//	"%s%s/%s",
+	//	h.baseURL,
+	//	url.QueryEscape(group),
+	//	url.QueryEscape(key),
+	//)
+	//res, err := http.Get(u)
+	//if err != nil {
+	//	return nil, err
+	//}
+	//defer res.Body.Close()
+	//
+	//if res.StatusCode != http.StatusOK {
+	//	return nil, fmt.Errorf("server returned:%s", res.Status)
+	//}
+	//
+	//b, err := io.ReadAll(res.Body)
+	//if err != nil {
+	//	return nil, fmt.Errorf("reading response body: %v", err)
+	//}
+	//
+	//return b, nil
+
+	//改造成rpc
+	out, err = pb.NewGroupCacheClient(GetGrpc(h.baseURL)).Get(ctx, in)
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
+	log.Println("节点间rpc 成功", h.baseURL)
+	return out, nil
+}
 
-	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned:%s", res.Status)
+//grpc clients
+var conns = make(map[string]*grpc.ClientConn)
+
+func GetGrpc(baseURL string) *grpc.ClientConn {
+	conn, ok := conns[baseURL]
+	if !ok || conn == nil {
+		var err error
+		conn, err = grpc.Dial(baseURL, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			panic(err)
+		}
+		conns[baseURL] = conn
 	}
+	return conn
+}
 
-	b, err := io.ReadAll(res.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading response body: %v", err)
+func ClosePyApis() {
+	for i, _ := range conns {
+		conns[i].Close()
 	}
-
-	return b, nil
 }
